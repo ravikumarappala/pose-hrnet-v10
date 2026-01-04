@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Model files (large)
+models/**/*.pth
+models/**/*.onnx
+models/**/*.pb
+
+# Data files (generated)
+logs/*.json
+measurement/data/*.json
+measurement/data/*.npz
+
+# Output files
+output/*.mp4
+output/*.avi
+
+# Build artifacts
+build/
+dist/
+vision/build/
+vision/dist/
+vision/torchvision.egg-info/
+
+# Compiled
+lib/nms/*.so
+lib/nms/*.o
+
+# System
+.DS_Store
+Thumbs.db
+
+# Temporary
+temp_reqs.txt
+ravinotes
+poc-usecase
+setup_new_repo.sh
+
+# Large model files (download separately)
+models/**/*.zip
+models/**/*.pth
+models/pytorch/
+
+# Embedded git repository
+vision/.git/
+
+# Large video files
+*.avi
+demo/*.mp4
+

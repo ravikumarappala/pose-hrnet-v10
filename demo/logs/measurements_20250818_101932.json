@@ -1,0 +1,13 @@
+{
+    "timestamp": "20250818_101932",
+    "model": "Hrnet",
+    "measurements": {
+        "right_upper_arm": 24.883941404025588,
+        "right_lower_arm": 15.51821048674123,
+        "left_upper_arm": 19.863055881791677,
+        "left_lower_arm": 17.938980498366913,
+        "right_upper_leg": 24.8429679115868,
+        "right_lower_leg": 2.3828603925732534,
+        "left_upper_leg": 23.87579379912932
+    }
+}
