@@ -10,6 +10,5 @@ scikit-image
 yacs>=0.1.5
 tensorboardX==1.6
 numpy==1.24.4
-yacs @ file:///home/conda/feedstock_root/build_artifacts/yacs_1645705974477/work
 uvicorn==0.33.0
 fastapi==0.122.0

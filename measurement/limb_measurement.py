@@ -31,6 +31,9 @@ import logging
 from pathlib import Path
 import torchvision
 import torchvision.transforms as transforms
+import signal
+import atexit
+import csv
 
 # HRNet demo imports
 import sys
@@ -190,6 +193,173 @@ try:
             os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 except:
     PLATFORM = "other"
+
+# Global variables for cleanup
+cleanup_resources = {
+    'pose_estimator': None,
+    'cap': None,
+    'video_writer_input': None,
+    'video_writer_output': None,
+    'output_dir': None,
+    'measurements_data': [],
+    'cleanup_done': False
+}
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C and other termination signals"""
+    logger.info("\nReceived signal to terminate. Cleaning up...")
+    cleanup_and_exit()
+
+def cleanup_and_exit():
+    """Cleanup all resources and save data before exiting"""
+    global cleanup_resources
+
+    # Prevent duplicate cleanup calls
+    if cleanup_resources['cleanup_done']:
+        return
+
+    cleanup_resources['cleanup_done'] = True
+    logger.info("Saving all data and releasing resources...")
+
+    # Save measurements to CSV
+    if cleanup_resources['measurements_data'] and cleanup_resources['output_dir']:
+        try:
+            save_measurements_to_csv(
+                cleanup_resources['measurements_data'],
+                cleanup_resources['output_dir']
+            )
+        except Exception as e:
+            logger.error(f"Error saving measurements: {e}")
+
+    # Release pose estimator
+    if cleanup_resources['pose_estimator']:
+        try:
+            cleanup_resources['pose_estimator'].release()
+            if cleanup_resources['pose_estimator'].visualizer_3d:
+                cleanup_resources['pose_estimator'].visualizer_3d.cleanup()
+        except Exception as e:
+            logger.error(f"Error releasing pose estimator: {e}")
+
+    # Release video capture
+    if cleanup_resources['cap']:
+        try:
+            cleanup_resources['cap'].release()
+        except Exception as e:
+            logger.error(f"Error releasing video capture: {e}")
+
+    # Release video writers
+    if cleanup_resources['video_writer_input']:
+        try:
+            cleanup_resources['video_writer_input'].release()
+            logger.info("Input video saved successfully")
+        except Exception as e:
+            logger.error(f"Error releasing input video writer: {e}")
+
+    if cleanup_resources['video_writer_output']:
+        try:
+            cleanup_resources['video_writer_output'].release()
+            logger.info("Output video saved successfully")
+        except Exception as e:
+            logger.error(f"Error releasing output video writer: {e}")
+
+    # Close all OpenCV windows
+    try:
+        cv2.destroyAllWindows()
+    except:
+        pass
+
+    # Clear CUDA cache on Jetson
+    if PLATFORM == "jetson" and torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except:
+            pass
+
+    logger.info("Cleanup completed. Exiting...")
+    sys.exit(0)
+
+def save_measurements_to_csv(measurements_data, output_dir):
+    """Save all measurements to CSV file in table format"""
+    if not measurements_data:
+        logger.warning("No measurements to save")
+        return
+
+    csv_file = output_dir / "measurements_table.csv"
+
+    # Get all unique limb names
+    all_limbs = set()
+    for frame_data in measurements_data:
+        if 'measurements' in frame_data:
+            all_limbs.update(frame_data['measurements'].keys())
+
+    all_limbs = sorted(list(all_limbs))
+
+    # Write CSV file
+    with open(csv_file, 'w', newline='') as f:
+        fieldnames = ['frame_number', 'timestamp'] + all_limbs
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+        writer.writeheader()
+        for frame_data in measurements_data:
+            row = {
+                'frame_number': frame_data.get('frame_number', ''),
+                'timestamp': frame_data.get('timestamp', '')
+            }
+            if 'measurements' in frame_data:
+                for limb in all_limbs:
+                    row[limb] = f"{frame_data['measurements'].get(limb, ''):.2f}" if limb in frame_data['measurements'] else ''
+            writer.writerow(row)
+
+    logger.info(f"Measurements saved to: {csv_file}")
+
+    # Also save summary statistics
+    summary_file = output_dir / "measurements_summary.csv"
+    with open(summary_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Limb', 'Average (cm)', 'Min (cm)', 'Max (cm)', 'Std Dev (cm)'])
+
+        for limb in all_limbs:
+            values = []
+            for frame_data in measurements_data:
+                if 'measurements' in frame_data and limb in frame_data['measurements']:
+                    values.append(frame_data['measurements'][limb])
+
+            if values:
+                avg = np.mean(values)
+                min_val = np.min(values)
+                max_val = np.max(values)
+                std_val = np.std(values)
+                writer.writerow([limb, f"{avg:.2f}", f"{min_val:.2f}", f"{max_val:.2f}", f"{std_val:.2f}"])
+
+    logger.info(f"Summary statistics saved to: {summary_file}")
+
+    # Create README file in output directory
+    readme_file = output_dir / "README.txt"
+    with open(readme_file, 'w') as f:
+        f.write("Pose Estimation and Limb Measurement Output\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Session Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total Frames Processed: {len(measurements_data)}\n\n")
+        f.write("Files in this directory:\n")
+        f.write("-" * 50 + "\n")
+        f.write("1. *_input.avi - Original input video\n")
+        f.write("2. *_output.avi - Output video with pose overlay and measurements\n")
+        f.write("3. measurements_table.csv - Frame-by-frame measurements (all joints)\n")
+        f.write("4. measurements_summary.csv - Statistical summary (avg, min, max, std)\n")
+        f.write("5. README.txt - This file\n\n")
+        f.write("Measurement Units: All measurements are in centimeters (cm)\n\n")
+        f.write("Joint Pairs Measured:\n")
+        f.write("  - Upper Arms (left/right shoulder to elbow)\n")
+        f.write("  - Lower Arms (left/right elbow to wrist)\n")
+        f.write("  - Upper Legs (left/right hip to knee)\n")
+        f.write("  - Lower Legs (left/right knee to ankle)\n")
+
+    logger.info(f"README saved to: {readme_file}")
+
+# Register signal handlers and cleanup
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+atexit.register(cleanup_and_exit)
 
 # Simple HRNet Model Class
 
@@ -367,11 +537,13 @@ class PoseEstimator:
 
         # Create args object for config
         args = type('Args', (), {})()
-        args.cfg = 'inference-config.yaml'
+        # Use absolute path to config file in demo directory
+        script_dir = Path(__file__).parent
+        args.cfg = str(script_dir / '..' / 'demo' / 'inference-config.yaml')
         args.opts = []
         args.modelDir = ''
         args.logDir = ''
-        args.dataDir = '../'  # Set data dir to parent (HRNet root)
+        args.dataDir = str(script_dir / '..')  # Set data dir to parent (HRNet root)
         
         # Update config
         update_config(cfg, args)
@@ -886,15 +1058,23 @@ class PoseEstimator:
             "model": self.model_type.title(),
             "measurements": self.limb_data
         }
-        
+
         # Ensure logs directory exists
         os.makedirs("logs", exist_ok=True)
-        
+
         # Write to file
         with open(f"logs/measurements_{timestamp}.json", "w") as f:
             json.dump(log_data, f, indent=4)
-        
+
         logger.info(f"Logged measurements to logs/measurements_{timestamp}.json")
+
+    def get_current_measurements(self):
+        """Get current frame measurements with timestamp"""
+        return {
+            'frame_number': self.frame_count,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            'measurements': self.limb_data.copy()
+        }
     
     def release(self):
         """Release resources"""
@@ -911,6 +1091,8 @@ class PoseEstimator:
             pass
 
 def main():
+    global cleanup_resources
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Pose Estimation and Limb Measurement with Camera or Video File')
     parser.add_argument('--model', type=str, default='mediapipe', choices=['mediapipe', 'hrnet'],
@@ -919,11 +1101,17 @@ def main():
     parser.add_argument('--camera', type=str, default='auto', choices=['auto', 'realsense', 'rgb'],
                         help='Camera type: auto (detect), realsense (force RealSense), rgb (force RGB webcam)')
     parser.add_argument('--input', type=str, help='Input video file path (if not provided, uses camera)')
-    parser.add_argument('--output', type=str, help='Output video file path to save processed video')
     parser.add_argument('--save-data', action='store_true', help='Save comprehensive frame data for 3D SMPL pipeline')
     parser.add_argument('--session-name', type=str, help='Custom session name for data storage')
     parser.add_argument('--3d', action='store_true', help='Enable real-time 3D skeleton visualization')
     args = parser.parse_args()
+
+    # Create output directory with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = Path('output') / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_resources['output_dir'] = output_dir
+    logger.info(f"Output directory created: {output_dir}")
     
     # Platform optimization
     if PLATFORM == "jetson":
@@ -935,17 +1123,18 @@ def main():
     # Initialize pose estimator with selected model
     logger.info(f"Initializing pose estimator with model: {args.model}")
     pose_estimator = PoseEstimator(
-        model_type=args.model, 
+        model_type=args.model,
         enable_smpl=args.smpl,
         enable_storage=args.save_data,
         enable_3d=getattr(args, '3d', False)
     )
-    
+    cleanup_resources['pose_estimator'] = pose_estimator
+
     # Set custom session name if provided
     if args.save_data and args.session_name and pose_estimator.data_storage:
         pose_estimator.data_storage.session_name = args.session_name
         pose_estimator.data_storage.session_file = pose_estimator.data_storage.output_dir / f"{args.session_name}.json"
-    
+
     # Check if model loaded successfully
     if pose_estimator.model is None:
         logger.error(f"Failed to initialize {args.model} model. Exiting.")
@@ -965,6 +1154,7 @@ def main():
         if not cap.isOpened():
             logger.error(f"Failed to open video file: {args.input}")
             return
+        cleanup_resources['cap'] = cap
         logger.info(f"Using video file input: {args.input}")
         use_realsense = False  # Video files don't have depth info
         
@@ -1022,6 +1212,7 @@ def main():
             if not cap.isOpened():
                 logger.error("Failed to open RGB camera")
                 return
+            cleanup_resources['cap'] = cap
             
             # Set optimal resolution for AGX Orin
             if PLATFORM == "jetson":
@@ -1051,42 +1242,48 @@ def main():
             if pose_estimator.visualizer_3d:
                 pose_estimator.visualizer_3d.initialize()
     
-    # Initialize video writer if output is specified
-    video_writer = None
-    if args.output:
-        # Get video properties for writer initialization
-        if args.input:
-            # Use input video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        elif use_realsense:
-            # RealSense properties
-            fps = 30.0
-            width = 640
-            height = 480
-        else:
-            # RGB camera properties
-            fps = 30.0
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) if cap else 640
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) if cap else 480
-        
-        # Initialize video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video_writer = cv2.VideoWriter(args.output, fourcc, fps, (width, height))
-        logger.info(f"Saving output to: {args.output}")
+    # Initialize video writers (both input and output)
+    # Get video properties for writer initialization
+    if args.input:
+        # Use input video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    elif use_realsense:
+        # RealSense properties
+        fps = 30.0
+        width = 640
+        height = 480
+    else:
+        # RGB camera properties
+        fps = 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) if cap else 640
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) if cap else 480
+
+    # Create video writers in output folder
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    input_video_path = output_dir / f"{timestamp}_input.avi"
+    output_video_path = output_dir / f"{timestamp}_output.avi"
+
+    video_writer_input = cv2.VideoWriter(str(input_video_path), fourcc, fps, (width, height))
+    video_writer_output = cv2.VideoWriter(str(output_video_path), fourcc, fps, (width, height))
+
+    cleanup_resources['video_writer_input'] = video_writer_input
+    cleanup_resources['video_writer_output'] = video_writer_output
+
+    logger.info(f"Saving input video to: {input_video_path}")
+    logger.info(f"Saving output video to: {output_video_path}")
     
     # Display controls
     logger.info("Controls:")
-    logger.info("  'q' - Quit")
+    logger.info("  'q' - Quit (or Ctrl+C for safe shutdown)")
     logger.info("  's' - Toggle SMPL rendering")
     logger.info(f"  Using {args.model.title()} pose estimation")
     if getattr(args, '3d', False):
         logger.info("  3D skeleton visualization: ENABLED")
     if args.save_data:
         logger.info("  Data storage: ENABLED")
-    if args.output:
-        logger.info(f"  Saving output to: {args.output}")
+    logger.info(f"  Output folder: {output_dir}")
     
     # Main loop
     try:
@@ -1128,14 +1325,19 @@ def main():
                        (10, processed_frame.shape[0] - 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             
-            cv2.putText(processed_frame, f"Model: {args.model.title()}", 
+            cv2.putText(processed_frame, f"Model: {args.model.title()}",
                        (10, processed_frame.shape[0] - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            
-            # Save frame to video if output is specified
-            if video_writer is not None:
-                video_writer.write(processed_frame)
-            
+
+            # Save frames to both input and output videos
+            video_writer_input.write(color_frame)
+            video_writer_output.write(processed_frame)
+
+            # Collect measurements for CSV export
+            if pose_estimator.limb_data:
+                measurement_entry = pose_estimator.get_current_measurements()
+                cleanup_resources['measurements_data'].append(measurement_entry)
+
             # Display frame
             cv2.imshow(f'{args.model.title()} Pose Estimation', processed_frame)
             
@@ -1148,46 +1350,21 @@ def main():
                 pose_estimator.smpl_renderer.toggle()
     
     except KeyboardInterrupt:
-        logger.info("Application stopped by user")
-    
+        logger.info("\nApplication stopped by user (Ctrl+C)")
+
     finally:
-        # Save session data and export summary
+        # Save session data if enabled
         if pose_estimator.data_storage:
-            session_file = pose_estimator.data_storage.save_session()
-            summary = pose_estimator.data_storage.export_summary()
-            logger.info(f"Saved {pose_estimator.frame_count} frames to: {session_file}")
-            logger.info(f"Detection rate: {summary['frame_statistics']['detection_rate']:.2%}")
-        
-        # Release resources
-        try:
-            pose_estimator.release()
-        except:
-            pass
-        
-        # Clean up 3D visualizer
-        if pose_estimator.visualizer_3d:
-            pose_estimator.visualizer_3d.cleanup()
-        
-        if cap is not None:
             try:
-                cap.release()
-            except:
-                pass
-        
-        if video_writer is not None:
-            try:
-                video_writer.release()
-                logger.info(f"Video saved to: {args.output}")
-            except:
-                pass
-        
-        cv2.destroyAllWindows()
-        
-        # Clear CUDA cache on Jetson
-        if PLATFORM == "jetson" and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        logger.info("Application terminated")
+                session_file = pose_estimator.data_storage.save_session()
+                summary = pose_estimator.data_storage.export_summary()
+                logger.info(f"Saved {pose_estimator.frame_count} frames to: {session_file}")
+                logger.info(f"Detection rate: {summary['frame_statistics']['detection_rate']:.2%}")
+            except Exception as e:
+                logger.error(f"Error saving session data: {e}")
+
+        # Call cleanup function to save all data and release resources
+        cleanup_and_exit()
 
 if __name__ == "__main__":
     main()

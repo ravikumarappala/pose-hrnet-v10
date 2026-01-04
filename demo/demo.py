@@ -19,6 +19,7 @@ import torchvision
 import cv2
 import numpy as np
 import time
+from datetime import datetime
 
 
 import _init_paths
@@ -257,13 +258,21 @@ def main():
 
     if args.webcam or args.video:
         if args.write:
-            save_path = 'output.avi'
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_save_path = f'{timestamp}_output_pose.avi'
+            input_save_path = f'{timestamp}_input.avi'
             fourcc = cv2.VideoWriter_fourcc(*'XVID')
-            out = cv2.VideoWriter(save_path,fourcc, 24.0, (int(vidcap.get(3)),int(vidcap.get(4))))
+            fps = vidcap.get(cv2.CAP_PROP_FPS) if vidcap.get(cv2.CAP_PROP_FPS) > 0 else 24.0
+            frame_width = int(vidcap.get(3))
+            frame_height = int(vidcap.get(4))
+            out_pose = cv2.VideoWriter(output_save_path, fourcc, fps, (frame_width, frame_height))
+            out_input = cv2.VideoWriter(input_save_path, fourcc, fps, (frame_width, frame_height))
+            print(f'Recording to: {input_save_path} and {output_save_path}')
         while True:
             ret, image_bgr = vidcap.read()
             if ret:
                 last_time = time.time()
+                image_bgr_original = image_bgr.copy() if args.write else None
                 image = image_bgr[:, :, [2, 1, 0]]
 
                 input = []
@@ -289,7 +298,8 @@ def main():
                     img = cv2.putText(image_bgr, 'fps: '+ "%.2f"%(fps), (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
 
                 if args.write:
-                    out.write(image_bgr)
+                    out_input.write(image_bgr_original)
+                    out_pose.write(image_bgr)
 
                 cv2.imshow('demo',image_bgr)
                 if cv2.waitKey(1) & 0XFF==ord('q'):
@@ -301,8 +311,9 @@ def main():
         cv2.destroyAllWindows()
         vidcap.release()
         if args.write:
-            print('video has been saved as {}'.format(save_path))
-            out.release()
+            out_input.release()
+            out_pose.release()
+            print(f'Videos saved as:\n  Input: {input_save_path}\n  Output: {output_save_path}')
 
     else:
         # estimate on the image
