@@ -11,16 +11,59 @@ Comprehensive 3D pose estimation and limb measurement system with multi-model su
 - 💾 **Data Pipeline**: SMPL-ready frame data export
 - ⚡ **Platform Optimized**: Jetson AGX Orin support
 
+## Installation
+
+### 1. Clone Repository
+```bash
+git clone https://github.com/ravikumarappala/pose-hrnet-v10.git
+cd pose-hrnet-v10
+```
+
+### 2. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Download Pre-trained Models
+
+**Important:** Model files are excluded from this repository due to size. Download them separately:
+
+#### Option A: Download from Official HRNet Repository
+```bash
+# Create models directory
+mkdir -p models/pytorch/pose_coco
+
+# Download HRNet W32 model (recommended)
+wget https://drive.google.com/uc?export=download&id=1zYC7go9EV0XaSlSBjMaiyE_4TcHc_S38 \
+  -O models/pytorch/pose_coco/pose_hrnet_w32_384x288.pth
+```
+
+#### Option B: Manual Download
+1. Visit: https://github.com/HRNet/HRNet-Human-Pose-Estimation
+2. Download model weights from their model zoo
+3. Place in `models/pytorch/pose_coco/` directory
+
+**Required Model Files:**
+- `pose_hrnet_w32_384x288.pth` (110 MB) - For HRNet model
+- Optional: Additional models for different configurations
+
+**Model Directory Structure:**
+```
+models/
+└── pytorch/
+    └── pose_coco/
+        ├── pose_hrnet_w32_384x288.pth   (required for HRNet)
+        ├── pose_hrnet_w48_384x288.pth   (optional, higher accuracy)
+        └── ...
+```
+
 ## Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run with MediaPipe (fast)
+# Run with MediaPipe (no model download needed)
 python demo/limb_measurement.py
 
-# Run with HRNet (accurate)
+# Run with HRNet (requires model download above)
 python demo/limb_measurement.py --model hrnet --camera realsense
 
 # Enable 3D visualization
@@ -74,5 +117,25 @@ curl -X POST http://localhost:8000/process-frame \
 - HRNet: ~15 FPS, <6GB GPU
 
 See [CHANGE_DOCUMENTATION.md](CHANGE_DOCUMENTATION.md) for complete details.
-# pose-hrnet-v10
-# pose-hrnet-v10
+
+## Additional Resources
+
+- **Original HRNet:** https://github.com/HRNet/HRNet-Human-Pose-Estimation
+- **MediaPipe:** https://google.github.io/mediapipe/
+- **RealSense SDK:** https://github.com/IntelRealSense/librealsense
+
+## License
+
+See LICENSE file for details.
+
+## Citation
+
+If you use this code in your research, please cite the original HRNet paper:
+```
+@inproceedings{sun2019deep,
+  title={Deep High-Resolution Representation Learning for Human Pose Estimation},
+  author={Sun, Ke and Xiao, Bin and Liu, Dong and Wang, Jingdong},
+  booktitle={CVPR},
+  year={2019}
+}
+```
