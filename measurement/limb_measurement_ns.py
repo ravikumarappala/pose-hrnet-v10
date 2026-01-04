@@ -474,8 +474,8 @@ class SMPLRenderer:
 
 class PoseEstimator:
     """Pose estimation class supporting multiple models"""
-
-    def __init__(self, model_type='mediapipe', enable_smpl=False, enable_storage=True, enable_3d=False, stereo_params_file=None):
+    
+    def __init__(self, model_type='mediapipe', enable_smpl=False, enable_storage=True, enable_3d=False):
         self.model = None
         self.model_type = model_type
         self.smpl_renderer = SMPLRenderer()
@@ -483,204 +483,30 @@ class PoseEstimator:
         self.frame_count = 0
         self.measurement_buffer = []
         self.buffer_size = 30  # Number of frames to average measurements over
-
-        # Load stereo camera parameters
-        self.stereo_params = None
-        self.camera_matrix = None
-        self.dist_coeffs = None
-        self.baseline = None
-        self.fx = 600.0  # Default values
-        self.fy = 600.0
-        self.cx = 320.0
-        self.cy = 240.0
-        self.load_stereo_params(stereo_params_file)
-
+        
         # Initialize frame data storage
         self.enable_storage = enable_storage
         self.data_storage = None
         if enable_storage:
             self.data_storage = FrameDataStorage()
-
+        
         # Initialize 3D visualizer
         self.enable_3d = enable_3d
         self.visualizer_3d = None
         if enable_3d:
             self.visualizer_3d = SkeletonVisualizer3DManager(enable_3d=True)
-
+        
         # Initialize camera
         self.pipeline = None
         self.align = None
-
+        
         # Initialize selected model
         self.load_model(model_type)
-
+        
         # Enable SMPL if requested
         if enable_smpl:
             self.smpl_renderer.toggle()
-
-    def load_stereo_params(self, stereo_params_file=None):
-        """Load stereo camera parameters from .npz file"""
-        if stereo_params_file is None:
-            # Try default location in measurement directory
-            script_dir = Path(__file__).parent
-            stereo_params_file = script_dir / 'stereo_params.npz'
-        else:
-            stereo_params_file = Path(stereo_params_file)
-
-        if not stereo_params_file.exists():
-            logger.warning(f"Stereo parameters file not found: {stereo_params_file}")
-            logger.warning("Using default camera parameters (fx=600, fy=600, cx=320, cy=240)")
-            return False
-
-        try:
-            # Load stereo parameters
-            self.stereo_params = np.load(stereo_params_file)
-
-            # Extract all stereo calibration parameters
-            self.K1 = self.stereo_params['K1']
-            self.K2 = self.stereo_params['K2']
-            self.dist1 = self.stereo_params['dist1']
-            self.dist2 = self.stereo_params['dist2']
-            self.R = self.stereo_params['R']
-            self.T = self.stereo_params['T']
-            self.P1 = self.stereo_params['P1']
-            self.P2 = self.stereo_params['P2']
-
-            # Use K1 for main camera matrix
-            self.camera_matrix = self.K1
-            self.dist_coeffs = self.dist1
-
-            # Calculate baseline from translation vector (in mm, matching calibration)
-            self.baseline_mm = np.linalg.norm(self.T)
-            self.baseline = self.baseline_mm / 10.0  # Convert mm to cm for display
-
-            # Extract focal lengths and principal point from K1
-            self.fx = float(self.K1[0, 0])
-            self.fy = float(self.K1[1, 1])
-            self.cx = float(self.K1[0, 2])
-            self.cy = float(self.K1[1, 2])
-
-            # Enable stereo mode
-            self.stereo_mode = True
-            self.stereo_rectify_maps = None
-
-            # Set depth scale to 1.0 since our stereo depth is already in meters
-            self.depth_scale = 1.0
-
-            logger.info(f"Loaded stereo parameters from: {stereo_params_file}")
-            logger.info(f"Camera intrinsics - fx: {self.fx:.2f}, fy: {self.fy:.2f}, cx: {self.cx:.2f}, cy: {self.cy:.2f}")
-            logger.info(f"Baseline: {self.baseline:.2f} cm ({self.baseline_mm:.2f} mm)")
-            logger.info("Stereo depth computation enabled")
-
-            return True
-        except Exception as e:
-            logger.error(f"Error loading stereo parameters: {e}")
-            logger.warning("Using default camera parameters")
-            self.stereo_mode = False
-            return False
-
-    def split_stereo_frame(self, frame):
-        """Split side-by-side stereo frame into left and right images (matching existing stereo pipeline)"""
-        if frame is None:
-            return None, None
-
-        h, w = frame.shape[:2]
-        mid = w // 2
-
-        # Split at midpoint
-        frame_left = frame[:, :mid]
-        frame_right = frame[:, mid:]
-
-        # Flip both frames (matching calibration preprocessing)
-        frame_left = cv2.flip(frame_left, 1)
-        frame_right = cv2.flip(frame_right, 1)
-
-        return frame_left, frame_right
-
-    def compute_stereo_depth(self, frame_left, frame_right):
-        """Compute depth map from stereo pair using calibrated parameters"""
-        if not hasattr(self, 'stereo_mode') or not self.stereo_mode:
-            logger.warning("Stereo mode not enabled, cannot compute depth")
-            return None
-
-        try:
-            # Get image size
-            h, w = frame_left.shape[:2]
-            img_size = (w, h)
-
-            # Initialize rectification maps if not done yet
-            if self.stereo_rectify_maps is None:
-                logger.info(f"Initializing stereo rectification for image size: {img_size}")
-
-                # Compute stereo rectification
-                R1, R2, P1_new, P2_new, Q, roi1, roi2 = cv2.stereoRectify(
-                    self.K1, self.dist1,
-                    self.K2, self.dist2,
-                    img_size,
-                    self.R, self.T,
-                    alpha=0
-                )
-
-                # Create rectification maps
-                self.map1_left, self.map2_left = cv2.initUndistortRectifyMap(
-                    self.K1, self.dist1, R1, P1_new, img_size, cv2.CV_32FC1
-                )
-                self.map1_right, self.map2_right = cv2.initUndistortRectifyMap(
-                    self.K2, self.dist2, R2, P2_new, img_size, cv2.CV_32FC1
-                )
-
-                # Store Q matrix for 3D reprojection
-                self.Q_matrix = Q
-
-                # Initialize stereo matcher
-                min_disp = 0
-                num_disp = 128  # Must be divisible by 16
-                block_size = 5
-
-                self.stereo_matcher = cv2.StereoSGBM_create(
-                    minDisparity=min_disp,
-                    numDisparities=num_disp,
-                    blockSize=block_size,
-                    P1=8 * 3 * block_size ** 2,
-                    P2=32 * 3 * block_size ** 2,
-                    disp12MaxDiff=1,
-                    uniquenessRatio=10,
-                    speckleWindowSize=100,
-                    speckleRange=32
-                )
-
-                self.stereo_rectify_maps = True
-                logger.info("Stereo rectification maps initialized")
-
-            # Rectify images
-            left_rectified = cv2.remap(frame_left, self.map1_left, self.map2_left, cv2.INTER_LINEAR)
-            right_rectified = cv2.remap(frame_right, self.map1_right, self.map2_right, cv2.INTER_LINEAR)
-
-            # Convert to grayscale for stereo matching
-            left_gray = cv2.cvtColor(left_rectified, cv2.COLOR_BGR2GRAY)
-            right_gray = cv2.cvtColor(right_rectified, cv2.COLOR_BGR2GRAY)
-
-            # Compute disparity
-            disparity = self.stereo_matcher.compute(left_gray, right_gray).astype(np.float32) / 16.0
-
-            # Convert disparity to depth using: depth = (baseline * focal_length) / disparity
-            depth_map = np.zeros_like(disparity, dtype=np.float32)
-            valid_disparity = disparity > 0
-
-            # depth in mm = (baseline_mm * fx) / disparity
-            depth_map[valid_disparity] = (self.baseline_mm * self.fx) / disparity[valid_disparity]
-
-            # Convert from mm to meters for consistency with RealSense depth scale
-            depth_map = depth_map / 1000.0
-
-            return depth_map
-
-        except Exception as e:
-            logger.error(f"Error computing stereo depth: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
-
+    
     def load_model(self, model_type='mediapipe'):
         """Load the specified pose estimation model"""
         try:
@@ -1140,16 +966,21 @@ class PoseEstimator:
                                 start_depth = np.median(start_depth_values) * self.depth_scale  # Convert to meters
                                 end_depth = np.median(end_depth_values) * self.depth_scale  # Convert to meters
                                 
-                                # Calculate 3D coordinates using stereo camera intrinsics
+                                # Calculate 3D coordinates
                                 # Convert from image coordinates to camera coordinates
-                                # Using actual camera intrinsic parameters from stereo calibration
-
-                                start_x = (start_point[0] - self.cx) * start_depth / self.fx
-                                start_y = (start_point[1] - self.cy) * start_depth / self.fy
+                                # This is a simplified conversion - in a real application, 
+                                # you would use the camera's intrinsic parameters
+                                fx = 600.0  # Approximate focal length in pixels (x)
+                                fy = 600.0  # Approximate focal length in pixels (y)
+                                cx = depth_frame.shape[1] / 2  # Principal point x
+                                cy = depth_frame.shape[0] / 2  # Principal point y
+                                
+                                start_x = (start_point[0] - cx) * start_depth / fx
+                                start_y = (start_point[1] - cy) * start_depth / fy
                                 start_z = start_depth
-
-                                end_x = (end_point[0] - self.cx) * end_depth / self.fx
-                                end_y = (end_point[1] - self.cy) * end_depth / self.fy
+                                
+                                end_x = (end_point[0] - cx) * end_depth / fx
+                                end_y = (end_point[1] - cy) * end_depth / fy
                                 end_z = end_depth
                                 
                                 # Calculate Euclidean distance in 3D space
@@ -1273,7 +1104,6 @@ def main():
     parser.add_argument('--save-data', action='store_true', help='Save comprehensive frame data for 3D SMPL pipeline')
     parser.add_argument('--session-name', type=str, help='Custom session name for data storage')
     parser.add_argument('--3d', action='store_true', help='Enable real-time 3D skeleton visualization')
-    parser.add_argument('--stereo-params', type=str, help='Path to stereo camera parameters .npz file (default: measurement/stereo_params.npz)')
     args = parser.parse_args()
 
     # Create output directory with timestamp
@@ -1292,13 +1122,11 @@ def main():
     
     # Initialize pose estimator with selected model
     logger.info(f"Initializing pose estimator with model: {args.model}")
-    stereo_params_path = args.stereo_params if hasattr(args, 'stereo_params') and args.stereo_params else None
     pose_estimator = PoseEstimator(
         model_type=args.model,
         enable_smpl=args.smpl,
         enable_storage=args.save_data,
-        enable_3d=getattr(args, '3d', False),
-        stereo_params_file=stereo_params_path
+        enable_3d=getattr(args, '3d', False)
     )
     cleanup_resources['pose_estimator'] = pose_estimator
 
@@ -1467,30 +1295,15 @@ def main():
                     logger.warning("Failed to get frames from RealSense")
                     continue
             else:
-                ret, raw_frame = cap.read()
+                ret, color_frame = cap.read()
                 if not ret:
                     if args.input:
                         logger.info("End of video file reached")
                     else:
                         logger.error("Failed to get frame from RGB camera")
                     break
-
-                # Check if stereo mode is enabled
-                if hasattr(pose_estimator, 'stereo_mode') and pose_estimator.stereo_mode:
-                    # Split stereo frame and compute depth
-                    frame_left, frame_right = pose_estimator.split_stereo_frame(raw_frame)
-                    depth_frame = pose_estimator.compute_stereo_depth(frame_left, frame_right)
-
-                    # Use left frame for pose detection
-                    color_frame = frame_left
-
-                    # If depth computation failed, use dummy depth
-                    if depth_frame is None:
-                        depth_frame = np.zeros_like(color_frame[:, :, 0])
-                else:
-                    # Regular RGB mode without depth
-                    color_frame = raw_frame
-                    depth_frame = np.zeros_like(color_frame[:, :, 0])
+                # Create dummy depth frame for RGB mode
+                depth_frame = np.zeros_like(color_frame[:, :, 0])
             
             # Process frame
             start_time = time.time()
@@ -1507,12 +1320,7 @@ def main():
             if args.input:
                 camera_info = f"Video File: {os.path.basename(args.input)}"
             else:
-                if use_realsense:
-                    camera_info = "RealSense D455"
-                elif hasattr(pose_estimator, 'stereo_mode') and pose_estimator.stereo_mode:
-                    camera_info = "Stereo Camera (with depth)"
-                else:
-                    camera_info = "RGB Camera"
+                camera_info = "RealSense D455" if use_realsense else "RGB Camera"
             cv2.putText(processed_frame, f"FPS: {fps:.1f} | {camera_info}", 
                        (10, processed_frame.shape[0] - 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)

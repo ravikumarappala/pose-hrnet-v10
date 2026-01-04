@@ -1,0 +1,12 @@
+{
+    "timestamp": "20260104_180859",
+    "model": "Mediapipe",
+    "measurements": {
+        "left_upper_arm": 5.456967781209873,
+        "left_lower_arm": 7.323354403338261,
+        "right_upper_leg": 55.20510684964993,
+        "right_lower_leg": 8.867025071284916,
+        "left_upper_leg": 22.14010178963325,
+        "left_lower_leg": 12.49430124024033
+    }
+}
