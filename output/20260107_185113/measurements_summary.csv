@@ -1,0 +1,9 @@
+Limb,Average (cm),Min (cm),Max (cm),Std Dev (cm)
+left_lower_arm,25.26,8.57,81.48,17.94
+left_lower_leg,17.52,17.52,17.52,0.00
+left_upper_arm,32.89,11.75,89.17,23.08
+left_upper_leg,44.42,18.38,156.97,29.71
+right_lower_arm,30.50,9.79,111.50,26.05
+right_lower_leg,24.40,12.81,57.05,6.38
+right_upper_arm,33.03,14.91,84.44,18.18
+right_upper_leg,44.11,15.39,177.28,37.17

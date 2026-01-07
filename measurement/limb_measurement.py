@@ -24,8 +24,10 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import time
 import argparse
-import pyrealsense2 as rs
 from datetime import datetime
+
+# pyrealsense2 is imported conditionally when needed (for RealSense camera support)
+rs = None  # Will be imported when RealSense is actually used
 import json
 import logging
 from pathlib import Path
@@ -876,7 +878,11 @@ class PoseEstimator:
     
     def initialize_camera(self):
         """Initialize the RealSense camera"""
+        global rs
         try:
+            # Import pyrealsense2 when needed
+            import pyrealsense2 as rs
+            
             # Configure depth and color streams
             self.pipeline = rs.pipeline()
             config = rs.config()
